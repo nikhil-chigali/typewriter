@@ -120,5 +120,6 @@ and the font is bundled, so nothing is fetched at runtime.
 
 MIT — see [LICENSE](LICENSE).
 
-The bundled font, [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) by
-CodeMan38, is used under the SIL Open Font License 1.1 — see [assets/OFL.txt](assets/OFL.txt).
+The bundled font, [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P), is
+used under the SIL Open Font License 1.1 — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
