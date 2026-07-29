@@ -1,0 +1,61 @@
+{
+  "name": "typewriter",
+  "version": "1.0.0",
+  "description": "A tiny always-on-top pixel-art typewriter that prints and tracks your Markdown checklists.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "dist": "npm run icon && electron-builder --win",
+    "pack": "npm run icon && electron-builder --win --dir"
+  },
+  "author": "Nikhil Chigali",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nikhil-chigali/typewriter.git"
+  },
+  "homepage": "https://github.com/nikhil-chigali/typewriter#readme",
+  "bugs": {
+    "url": "https://github.com/nikhil-chigali/typewriter/issues"
+  },
+  "keywords": [
+    "electron",
+    "pixel-art",
+    "markdown",
+    "checklist",
+    "todo",
+    "always-on-top"
+  ],
+  "build": {
+    "appId": "com.typewriter.app",
+    "productName": "Typewriter",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Typewriter"
+    }
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  }
+}
