@@ -116,6 +116,13 @@ src/renderer/          app.js, audio.js, fx.js, styles.css, index.html
 No runtime dependencies — Electron and electron-builder are the only devDependencies,
 and the font is bundled, so nothing is fetched at runtime.
 
+## Credits
+
+The idea for this app comes from [Tina Huang](https://www.youtube.com/@TinaHuang1) — a
+pixel-art typewriter that prints your Markdown checklist and tracks it as you work. This
+is an independent implementation built from that concept, and is not affiliated with,
+endorsed by, or connected to her in any way.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
