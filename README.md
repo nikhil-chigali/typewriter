@@ -4,6 +4,12 @@ A tiny, always-on-top pixel-art typewriter for Windows 11 that prints your Markd
 checklist onto a sheet of paper and tracks it as you work.
 
 <p align="center">
+  <a href="https://github.com/nikhil-chigali/typewriter/releases/latest">
+    <img src="https://img.shields.io/github/v/release/nikhil-chigali/typewriter?style=flat-square&label=download&color=C1443C" alt="Download the latest release">
+  </a>
+</p>
+
+<p align="center">
   <img src="docs/focused.png" alt="Focus mode: one task on the sheet" width="340">
   &nbsp;&nbsp;
   <img src="docs/list.png" alt="Full list mode" width="340">
