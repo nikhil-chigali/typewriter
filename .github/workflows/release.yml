@@ -1,0 +1,106 @@
+name: release
+
+# Push a tag like v1.0.0 to build and publish a GitHub Release.
+# Run manually (Actions -> release -> Run workflow) to build without publishing —
+# the installers land as workflow artifacts so you can test them first.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron's postinstall has been seen to no-op and leave no binary behind,
+      # which only surfaces later as a confusing electron-builder failure.
+      - name: Ensure the Electron binary is present
+        shell: bash
+        run: |
+          if [ ! -f node_modules/electron/dist/electron.exe ]; then
+            echo "electron binary missing after npm ci; fetching it"
+            node node_modules/electron/install.js
+          fi
+          test -f node_modules/electron/dist/electron.exe
+
+      # A tag that disagrees with package.json produces artifacts whose filenames
+      # contradict the release they are attached to. Fail loudly instead.
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          pkg="v$(node -p "require('./package.json').version")"
+          echo "tag=$tag package.json=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag $tag does not match package.json version $pkg"
+            exit 1
+          fi
+
+      - name: Build installers
+        run: npm run dist
+
+      - name: List what was built
+        shell: bash
+        run: ls -la dist/*.exe
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typewriter-windows
+          path: dist/*.exe
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Write release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          A tiny always-on-top pixel-art typewriter that prints and tracks your
+          Markdown checklists.
+
+          ### Which file do I want?
+
+          | File | What it does |
+          |---|---|
+          | `Typewriter.Setup.<version>.exe` | Installer. Adds Start Menu and Desktop shortcuts and an entry in Add/Remove Programs. Installs per-user, so no admin rights needed. |
+          | `Typewriter.<version>.exe` | Portable. Run it from anywhere; installs nothing. |
+
+          Both are the same app, and both share the same config and records, so you
+          can move between them without losing anything.
+
+          ### A note on the SmartScreen warning
+
+          These builds are not code-signed, so Windows will show a
+          "Windows protected your PC" prompt on first run. Choose **More info ->
+          Run anyway**. Signing requires a paid certificate.
+          EOF
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.exe \
+            --title "Typewriter ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md
