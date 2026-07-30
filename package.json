@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
-    "dist": "npm run icon && electron-builder --win",
+    "dist": "npm run icon && electron-builder --win --publish never",
     "pack": "npm run icon && electron-builder --win --dir"
   },
   "author": "Nikhil Chigali",
