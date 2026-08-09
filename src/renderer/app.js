@@ -608,7 +608,7 @@ function wire() {
   document.addEventListener('drop', async (e) => {
     e.preventDefault();
     el.tw.classList.remove('dragover');
-    if (S.busy) return;   // a switch or another import already has the roller
+    if (S.busy) return flash('one moment...');   // a switch or another import already has the roller
 
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return flash();
@@ -620,7 +620,8 @@ function wire() {
   });
 
   document.addEventListener('paste', async (e) => {
-    if (isTyping(e.target) || S.busy) return;
+    if (isTyping(e.target)) return;
+    if (S.busy) return flash('one moment...');   // a switch or another import already has the roller
     const text = e.clipboardData && e.clipboardData.getData('text/plain');
     if (!text || !text.trim()) return flash();
     await importResult(api.importText(text));
