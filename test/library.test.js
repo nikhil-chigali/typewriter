@@ -282,6 +282,32 @@ test('listPlans falls back to file mtime when touchedAt cannot be parsed', () =>
   assert.deepEqual(rows.map((r) => r.title), ['Good Date', 'Bad Date']);
 });
 
+test('setArchived flips the flag and keeps the task state', () => {
+  const dir = tmpDir();
+  const p = seedPlan(dir, 'a.md', 'Alpha', [true, false], '2026-01-01T00:00:00.000Z');
+
+  assert.equal(lib.setArchived(p, true), true);
+  let rows = lib.listPlans(dir);
+  assert.equal(rows[0].archived, true);
+  assert.equal(rows[0].finished, true);
+  assert.equal(rows[0].done, 1, 'progress is untouched');
+
+  lib.setArchived(p, false);
+  rows = lib.listPlans(dir);
+  assert.equal(rows[0].archived, false);
+  assert.equal(rows[0].finished, false);
+});
+
+test('touchPlan floats a plan to the top of the shelf', () => {
+  const dir = tmpDir();
+  const a = seedPlan(dir, 'a.md', 'Alpha', [false], '2026-01-01T00:00:00.000Z');
+  seedPlan(dir, 'b.md', 'Beta', [false], '2026-02-01T00:00:00.000Z');
+
+  assert.deepEqual(lib.listPlans(dir).map((r) => r.title), ['Beta', 'Alpha']);
+  lib.touchPlan(a);
+  assert.deepEqual(lib.listPlans(dir).map((r) => r.title), ['Alpha', 'Beta']);
+});
+
 test('markSidecarCurrent keeps the cache trusted even when its write landed before the markdown write', () => {
   const dir = tmpDir();
   const p = seedPlan(dir, 'delayed.md', 'Delayed Write', [false, false], '2026-01-01T00:00:00.000Z');

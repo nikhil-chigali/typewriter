@@ -146,7 +146,38 @@ ipcMain.handle('tw:init', async () => {
     plan = lib.loadPlan(cfg.activePlan);
     if (!plan) setActivePlan(null); // Stored plan vanished or went bad.
   }
-  return { recordsDir, muted: !!cfg.muted, scale, plan: plan ? payload(plan) : null };
+  return {
+    recordsDir,
+    muted: !!cfg.muted,
+    scale,
+    planCount: lib.listPlans(recordsDir).length,
+    plan: plan ? payload(plan) : null,
+  };
+});
+
+ipcMain.handle('tw:list-plans', async () => {
+  try {
+    return { ok: true, plans: lib.listPlans(recordsDir, cfg.activePlan) };
+  } catch (err) {
+    console.error('[typewriter] list-plans:', err.message);
+    return { ok: true, plans: [] }; // An unreadable folder is an empty shelf.
+  }
+});
+
+ipcMain.handle('tw:switch-plan', async (_e, planPath) => {
+  try {
+    if (typeof planPath !== 'string' || !lib.isInside(recordsDir, planPath)) return fail('no such plan');
+
+    const plan = lib.loadPlan(planPath);
+    if (!plan) return fail('plan unreadable');
+
+    lib.touchPlan(planPath); // Whatever you open is now the most recent.
+    setActivePlan(planPath);
+    return { ok: true, plan: payload(lib.loadPlan(planPath)) };
+  } catch (err) {
+    console.error('[typewriter] switch-plan:', err.message);
+    return fail('could not open that plan');
+  }
 });
 
 ipcMain.handle('tw:import-file', async (_e, filePath) => {
@@ -202,7 +233,11 @@ ipcMain.handle('tw:toggle', async (_e, { index, done } = {}) => {
     // Sidecar first — it is the authority on reopen.
     plan.items[index].done = !!done;
     plan.items[index].at = done ? new Date().toISOString() : null;
-    if (!lib.writeSidecar(planPath, plan.items)) return fail('could not save progress');
+    const saved = lib.writeSidecar(planPath, plan.items, {
+      title: plan.title,
+      touchedAt: new Date().toISOString(),
+    });
+    if (!saved) return fail('could not save progress');
 
     const text = fs.readFileSync(planPath, 'utf8');
     const res = md.setTask(text, index, !!done);
@@ -239,6 +274,7 @@ ipcMain.handle('tw:abort', async (_e, { action, doneCount, total } = {}) => {
         const text = fs.readFileSync(planPath, 'utf8');
         const block = `**aborted (${md.stamp()}):** ${doneCount || 0}/${total || 0} done`;
         fs.writeFileSync(planPath, md.appendBlock(text, block), 'utf8');
+        lib.setArchived(planPath, true); // Abandoned plans sink into the done group.
       } else if (action === 'discard') {
         // Only ever inside the records directory.
         fs.rmSync(planPath, { force: true });

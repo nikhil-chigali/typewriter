@@ -271,6 +271,23 @@ function listPlans(recordsDir, activePlan = null) {
   return rows;
 }
 
+/** Mark a plan abandoned (or revive it). Task state is untouched. */
+function setArchived(planPath, archived) {
+  const plan = loadPlan(planPath);
+  if (!plan) return false;
+  return writeSidecar(planPath, plan.items, { title: plan.title, archived: !!archived });
+}
+
+/** Stamp a plan as worked on just now, floating it to the top of the shelf. */
+function touchPlan(planPath) {
+  const plan = loadPlan(planPath);
+  if (!plan) return false;
+  return writeSidecar(planPath, plan.items, {
+    title: plan.title,
+    touchedAt: new Date().toISOString(),
+  });
+}
+
 module.exports = {
   isInside,
   sidecarPath,
@@ -281,4 +298,6 @@ module.exports = {
   syncMarkdownToItems,
   markSidecarCurrent,
   listPlans,
+  setArchived,
+  touchPlan,
 };
