@@ -8,7 +8,8 @@
     "icon": "node scripts/make-icon.js",
     "dist": "npm run icon && electron-builder --win --publish never",
     "pack": "npm run icon && electron-builder --win --dir",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "test:ui": "node test/integration/shelf.cdp.js"
   },
   "author": "Nikhil Chigali",
   "license": "MIT",

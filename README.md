@@ -77,6 +77,18 @@ Dropped files are **copied** into your records folder — the original is never
 modified or deleted. If the name is taken, a timestamp is appended. Pasted plans are
 saved under a slug of their title.
 
+## Several plans at once
+
+Typewriter holds as many plans as you like. Press `▤` to see them all: live
+plans first, most recently worked on at the top, with finished and abandoned
+ones below a dotted rule. Click one to put it on the roller.
+
+Switching loses nothing. Each plan keeps its own progress file, so you can move
+between streams all day and come back to exactly where you left off.
+
+Dropping or pasting a new plan while one is loaded imports it and switches
+straight to it.
+
 ## Records
 
 Each plan gets a sidecar next to it:
@@ -97,6 +109,7 @@ checking a task rewrites `- [ ]` to `- [x]` and appends `(done YYYY-MM-DD HH:MM)
 | Drag the typewriter body | move the window |
 | Click a task or its box | check / uncheck |
 | `≡` / `●` | full list ↔ focus mode |
+| `▤` | your plans — switch between them |
 | `♪` / `✕` | sound on / muted |
 | `Ctrl+C` | abort the active plan |
 | `Ctrl` `+` / `-` / `0` | resize (see above) |
