@@ -138,15 +138,38 @@ function loadPlan(planPath) {
   };
 }
 
-/** Push sidecar truth back into the stored Markdown checkboxes. */
+/**
+ * Push sidecar truth back into the stored Markdown checkboxes.
+ *
+ * The `(done …)` stamps in the Markdown are the user's history — the sheet they
+ * read in their own editor — so a sync rewrites as little as possible: lines that
+ * already agree are left byte-for-byte alone, a line that really does flip is
+ * stamped with the completion time the sidecar recorded rather than "now", and
+ * the file is not written at all when nothing changed.
+ */
 function syncMarkdownToItems(planPath, items) {
   try {
-    let text = fs.readFileSync(planPath, 'utf8');
+    const original = fs.readFileSync(planPath, 'utf8');
+    let text = original;
+
+    const parsed = md.parsePlan(text);
+    const onDisk = parsed ? parsed.items : null;
     const total = md.countTasks(text);
+
     for (let i = 0; i < Math.min(total, items.length); i++) {
-      const res = md.setTask(text, i, items[i].done);
+      const want = !!items[i].done;
+      if (onDisk && onDisk[i] && onDisk[i].done === want) continue;
+
+      const at = want && items[i].at ? new Date(items[i].at) : null;
+      const when = at && !Number.isNaN(at.getTime()) ? at : new Date();
+      const res = md.setTask(text, i, want, when);
       if (res) text = res.text;
     }
+
+    // A pointless rewrite still bumps the mtime, which makes the sidecar look
+    // stale and re-triggers the freshness fallback on every later listing.
+    if (text === original) return;
+
     fs.writeFileSync(planPath, text, 'utf8');
     markSidecarCurrent(planPath);
   } catch (err) {
@@ -200,15 +223,24 @@ function summarise(planPath, activePlan) {
     done = Object.values(side.tasks).filter((t) => t && t.done).length;
   }
 
-  // No usable sidecar (missing, stale, pre-upgrade, or a bad count): fall
-  // back to the markdown itself. loadPlan also rewrites the sidecar, so the
-  // cache is fresh again by the time this plan is next listed.
+  // No usable sidecar (missing, stale, pre-upgrade, or a bad count): read the
+  // markdown itself. Deliberately not loadPlan — that upgrades the sidecar and
+  // syncs the markdown, and merely listing a shelf full of plans must never
+  // write to the user's files. Adoption happens when a plan is opened.
   if (!title || total === null || done === null) {
-    const plan = loadPlan(planPath);
-    if (!plan) return null;
-    title = plan.title;
-    total = plan.items.length;
-    done = plan.items.filter((i) => i.done).length;
+    let parsed = null;
+    try {
+      parsed = md.parsePlan(fs.readFileSync(planPath, 'utf8'));
+    } catch {
+      return null; // Unreadable file: not a plan we can show.
+    }
+    if (!parsed) return null;
+
+    if (!title) title = parsed.title;
+    if (total === null || done === null) {
+      total = parsed.items.length;
+      done = parsed.items.filter((i) => i.done).length;
+    }
   }
 
   if (!total) return null; // A plan with no tasks is not a plan.

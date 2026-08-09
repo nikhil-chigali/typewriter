@@ -82,6 +82,14 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/*
+ * The shelf scrolls once it outgrows the 320px cap, and nothing is ever removed
+ * from it. Without this the sheet inherits the clip's drag region, so dragging
+ * the scrollbar thumb — or touching the group label, the hint or the gaps
+ * between rows — moves the window instead of the list.
+ */
+#paper.shelf { -webkit-app-region: no-drag; }
+
 #paper::-webkit-scrollbar { width: 4px; }
 #paper::-webkit-scrollbar-track { background: var(--cream); }
 #paper::-webkit-scrollbar-thumb { background: var(--red); }

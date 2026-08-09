@@ -126,6 +126,7 @@ function render(opts) {
   if (!S.plan) return;
   el.title.textContent = `··· ${S.plan.title} ···`;
   el.title.title = S.plan.title;
+  el.paper.classList.remove('shelf');
   el.paper.classList.toggle('list', S.mode === 'list');
   el.paper.classList.toggle('complete', allDone());
   if (S.mode === 'list') buildList();
@@ -320,7 +321,7 @@ async function resetToIdle() {
   if (S.pending) clearTimeout(S.pending.timer);
   S.pending = null;
 
-  el.paper.classList.remove('list', 'complete');
+  el.paper.classList.remove('list', 'complete', 'shelf');
   await lowerPaper();
 
   S.plan = null;
@@ -469,6 +470,7 @@ async function toggleShelf() {
     // is no plan and would strand the shelf on screen.
     if (!S.plan) {
       S.mode = 'focused';
+      el.paper.classList.remove('shelf');
       await lowerPaper();
       el.body.innerHTML = '';
       el.title.textContent = '';
@@ -501,6 +503,7 @@ async function renderShelf() {
   if (S.mode !== 'shelf') return;
   const plans = (res && res.plans) || [];
   el.paper.classList.remove('list', 'complete');
+  el.paper.classList.add('shelf');   // the sheet scrolls here, so it must not be a drag region
   el.paper.classList.remove('hidden');
   setPaperY(0);
   el.title.textContent = '··· YOUR PLANS ···';

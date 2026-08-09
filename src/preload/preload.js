@@ -1,6 +1,6 @@
 'use strict';
 
-// Narrow IPC surface. The renderer gets these seven calls and nothing else.
+// Narrow IPC surface. The renderer gets these twelve calls and nothing else.
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 

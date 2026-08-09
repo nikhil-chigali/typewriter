@@ -150,7 +150,6 @@ ipcMain.handle('tw:init', async () => {
     recordsDir,
     muted: !!cfg.muted,
     scale,
-    planCount: lib.listPlans(recordsDir).length,
     plan: plan ? payload(plan) : null,
   };
 });

@@ -164,6 +164,18 @@ const pasteInto = (text) => `
     assert.deepEqual(await evaluate(`return [outerWidth, outerHeight];`), [420, 720]);
   });
 
+  // The sheet sits inside the clip's drag region, so without its own no-drag the
+  // scrollbar thumb and every gap between rows would drag the window instead.
+  await check('the shelf sheet is not a window-drag region', async () => {
+    const state = await evaluate(`
+      const paper = document.getElementById('paper');
+      return { marked: paper.classList.contains('shelf'),
+               region: getComputedStyle(paper).getPropertyValue('-webkit-app-region').trim() };
+    `);
+    assert.equal(state.marked, true, '#paper carries the shelf class while the shelf shows');
+    assert.equal(state.region, 'no-drag');
+  });
+
   // --- switching --------------------------------------------------------
   await evaluate(`
     const rows = [...document.querySelectorAll('.shelf-row')];
@@ -174,10 +186,12 @@ const pasteInto = (text) => `
   await check('switching loads the chosen plan and keeps its progress', async () => {
     const state = await evaluate(`
       return { title: document.getElementById('paper-title').textContent,
-               counter: document.getElementById('counter').textContent };
+               counter: document.getElementById('counter').textContent,
+               shelfClass: document.getElementById('paper').classList.contains('shelf') };
     `);
     assert.match(state.title, /Alpha Stream/);
     assert.equal(state.counter, '1/2 done', 'the tick made before switching away survived');
+    assert.equal(state.shelfClass, false, 'leaving the shelf drops its no-drag class');
   });
 
   // --- finishing sinks a plan into the done group ------------------------

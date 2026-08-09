@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const lib = require('../src/main/library');
+const md = require('../src/main/markdown');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tw-test-'));
@@ -192,15 +193,103 @@ test('listPlans marks the active plan', () => {
   assert.equal(rows.find((r) => r.title === 'Beta').active, false);
 });
 
-test('listPlans adopts a bare .md that has no sidecar', () => {
+test('listPlans shows a bare .md that has no sidecar, without adopting it', () => {
   const dir = tmpDir();
-  writePlan(dir, 'bare.md', '# Bare Plan\n\n- [ ] one\n- [x] two (done 2026-01-01 09:00)\n');
+  const p = writePlan(dir, 'bare.md', '# Bare Plan\n\n- [ ] one\n- [x] two (done 2026-01-01 09:00)\n');
 
   const rows = lib.listPlans(dir);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].title, 'Bare Plan');
   assert.equal(rows[0].done, 1);
   assert.equal(rows[0].total, 2);
+
+  // Adoption is an open-time act, per the design: listing only reads.
+  assert.equal(fs.existsSync(lib.sidecarPath(p)), false, 'listing writes no sidecar');
+});
+
+test('listPlans writes nothing: markdown, sidecar and both mtimes survive a listing', () => {
+  const dir = tmpDir();
+  const body = '# History\n\n## Only\n'
+    + '- [x] wireframe (done 2026-03-01 09:15)\n'
+    + '- [x] copy (done 2026-03-02 11:40)\n';
+  const p = writePlan(dir, 'history.md', body);
+  const sidePath = lib.sidecarPath(p);
+
+  // The sidecar shape that shipped before the shelf: no title, touchedAt or
+  // archived. Every existing user's records folder looks exactly like this.
+  fs.writeFileSync(sidePath, JSON.stringify({
+    plan: p,
+    count: 2,
+    tasks: {
+      0: { done: true, at: '2026-03-01T09:15:00.000Z' },
+      1: { done: true, at: '2026-03-02T11:40:00.000Z' },
+    },
+  }), 'utf8');
+
+  // Pin both mtimes so "unchanged" is provable without sleeping.
+  const pinned = new Date('2026-03-02T12:00:00.000Z');
+  fs.utimesSync(p, pinned, pinned);
+  fs.utimesSync(sidePath, pinned, pinned);
+
+  const before = {
+    md: fs.readFileSync(p, 'utf8'),
+    side: fs.readFileSync(sidePath, 'utf8'),
+    mdAt: fs.statSync(p).mtimeMs,
+    sideAt: fs.statSync(sidePath).mtimeMs,
+  };
+
+  const rows = lib.listPlans(dir);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, 'History', 'the title is derived from the markdown, not written to the sidecar');
+  assert.equal(rows[0].done, 2);
+  assert.equal(rows[0].total, 2);
+
+  assert.equal(fs.readFileSync(p, 'utf8'), before.md, 'the markdown is byte-for-byte unchanged');
+  assert.match(before.md, /\(done 2026-03-01 09:15\)/);
+  assert.match(fs.readFileSync(p, 'utf8'), /\(done 2026-03-01 09:15\)/, 'historical stamps are not restamped to now');
+  assert.match(fs.readFileSync(p, 'utf8'), /\(done 2026-03-02 11:40\)/);
+  assert.equal(fs.readFileSync(sidePath, 'utf8'), before.side, 'the sidecar is not upgraded by a mere listing');
+  assert.equal(fs.statSync(p).mtimeMs, before.mdAt, 'the markdown mtime is untouched');
+  assert.equal(fs.statSync(sidePath).mtimeMs, before.sideAt, 'the sidecar mtime is untouched');
+});
+
+test('listPlans does not revert a checkbox ticked by hand in the user\'s editor', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'book.md', '# Book\n\n- [ ] ch1\n- [ ] ch2\n');
+  const sidePath = lib.sidecarPath(p);
+
+  // Sidecar as the app last left it: nothing done.
+  fs.writeFileSync(sidePath, JSON.stringify({
+    plan: p,
+    count: 2,
+    tasks: { 0: { done: false, at: null }, 1: { done: false, at: null } },
+  }), 'utf8');
+
+  // Now the user ticks ch1 in their own editor, in a plan the app never opened.
+  const edited = '# Book\n\n- [x] ch1 (done 2026-04-04 08:00)\n- [ ] ch2\n';
+  fs.writeFileSync(p, edited, 'utf8');
+  const newer = new Date(fs.statSync(sidePath).mtime.getTime() + 5000);
+  fs.utimesSync(p, newer, newer);
+
+  const rows = lib.listPlans(dir);
+  assert.equal(rows[0].done, 1, 'the hand-ticked task is counted');
+  assert.equal(fs.readFileSync(p, 'utf8'), edited, 'and the tick is still there afterwards');
+});
+
+test('a sync stamps a flipped task with its recorded time and leaves settled lines alone', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'sync.md', '# Sync\n\n- [ ] alpha\n- [x] beta (done 2026-01-01 09:00)\n');
+
+  // Local time, because the markdown stamp is local while the sidecar is UTC.
+  const finishedAt = new Date(2026, 1, 3, 14, 5);
+  lib.syncMarkdownToItems(p, [
+    { done: true, at: finishedAt.toISOString() },
+    { done: true, at: '2026-01-01T09:00:00.000Z' },
+  ]);
+
+  const text = fs.readFileSync(p, 'utf8');
+  assert.match(text, new RegExp(`- \\[x\\] alpha \\(done ${md.stamp(finishedAt)}\\)`), 'the flip carries its own completion time');
+  assert.match(text, /- \[x\] beta \(done 2026-01-01 09:00\)/, 'a line that already agreed keeps its original stamp');
 });
 
 test('listPlans skips files that are not plans and never deletes them', () => {
