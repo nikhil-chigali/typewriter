@@ -56,18 +56,44 @@ async function connect() {
   throw new Error('could not attach to the app over CDP');
 }
 
+const CDP_TIMEOUT_MS = 8000; // generous next to the longest legitimate evaluate (~800ms)
+
+// Wraps the CDP websocket. Every send() settles one way or another: on reply,
+// on timeout (named after the method, so a failure is diagnosable), or on
+// socket error/close (which fails every call still in flight). Without this,
+// a dropped socket or a renderer that stops responding leaves an evaluate()
+// permanently pending, which would leave the always-on-top window stranded
+// on screen forever since the code that kills it is never reached.
 function rpc(ws) {
   let id = 0;
   const pending = new Map();
+
+  function rejectAll(err) {
+    for (const { reject, timer } of pending.values()) {
+      clearTimeout(timer);
+      reject(err);
+    }
+    pending.clear();
+  }
+
   ws.onmessage = (m) => {
     const msg = JSON.parse(m.data);
     const p = pending.get(msg.id);
-    if (p) { pending.delete(msg.id); p(msg.result); }
+    if (p) { pending.delete(msg.id); clearTimeout(p.timer); p.resolve(msg.result); }
   };
+  ws.onerror = () => rejectAll(new Error('CDP socket error'));
+  ws.onclose = () => rejectAll(new Error('CDP socket closed'));
+
   const send = (method, params = {}) => {
     const i = ++id;
     ws.send(JSON.stringify({ id: i, method, params }));
-    return new Promise((res) => pending.set(i, res));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(i);
+        reject(new Error(`CDP call timed out: ${method}`));
+      }, CDP_TIMEOUT_MS);
+      pending.set(i, { resolve, reject, timer });
+    });
   };
   const evaluate = async (expr) => {
     const r = await send('Runtime.evaluate', {

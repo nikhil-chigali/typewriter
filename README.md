@@ -126,14 +126,24 @@ your records folder), or **cancel**.
 
 ```
 src/main/main.js       window, IPC, lifecycle
-src/main/records.js    config, records folder, plan + sidecar storage
+src/main/config.js     user config and the records-folder picker
+src/main/library.js    plans, sidecars, listing and archiving
 src/main/markdown.js   plan parsing and in-place task rewriting
 src/preload/preload.js the IPC bridge (context-isolated)
-src/renderer/          app.js, audio.js, fx.js, styles.css, index.html
+src/renderer/          app.js, shelf.js, audio.js, fx.js, styles.css, index.html
 ```
 
 No runtime dependencies — Electron and electron-builder are the only devDependencies,
 and the font is bundled, so nothing is fetched at runtime.
+
+## Tests
+
+```bash
+npm test        # unit tests over the storage logic
+npm run test:ui # drives the real app over CDP — opens a window briefly, then closes it
+```
+
+See [test/shelf-integration.md](test/shelf-integration.md) for what neither layer covers.
 
 ## Credits
 
