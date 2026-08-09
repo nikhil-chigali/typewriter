@@ -281,3 +281,33 @@ test('listPlans falls back to file mtime when touchedAt cannot be parsed', () =>
   assert.equal(badRow.touchedAt, old.toISOString());
   assert.deepEqual(rows.map((r) => r.title), ['Good Date', 'Bad Date']);
 });
+
+test('markSidecarCurrent keeps the cache trusted even when its write landed before the markdown write', () => {
+  const dir = tmpDir();
+  const p = seedPlan(dir, 'delayed.md', 'Delayed Write', [false, false], '2026-01-01T00:00:00.000Z');
+  const sidePath = lib.sidecarPath(p);
+
+  // The real write order is sidecar-first, markdown-second (deliberately, so a
+  // crash mid-pair leaves the authoritative sidecar correct). On a slow disk
+  // those two writes can land in different filesystem timestamp ticks, which
+  // would make the sidecar look permanently stale by mtime alone. Simulate
+  // that landing order directly, then poison the cached count in a way that
+  // is only observable if the cache is actually trusted afterwards.
+  const planStat = fs.statSync(p);
+  const sideBehind = new Date(planStat.mtime.getTime() - 5000);
+  fs.utimesSync(sidePath, sideBehind, sideBehind);
+
+  const side = JSON.parse(fs.readFileSync(sidePath, 'utf8'));
+  side.tasks['0'] = { done: true, at: '2026-01-01T00:00:00.000Z' }; // cache-only: markdown still says false
+  fs.writeFileSync(sidePath, JSON.stringify(side), 'utf8');
+  fs.utimesSync(sidePath, sideBehind, sideBehind); // re-pin behind the markdown after the content edit
+
+  // Without the explicit stamp, the sidecar is still "behind" and listPlans
+  // would re-parse the markdown (done: 0). markSidecarCurrent re-ties the
+  // freshness clock the way a completed write pair would.
+  lib.markSidecarCurrent(p);
+
+  const rows = lib.listPlans(dir);
+  const row = rows.find((r) => r.title === 'Delayed Write');
+  assert.equal(row.done, 1, 'the cached count is trusted once the sidecar has been marked current');
+});

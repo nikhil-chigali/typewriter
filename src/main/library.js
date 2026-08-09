@@ -148,8 +148,25 @@ function syncMarkdownToItems(planPath, items) {
       if (res) text = res.text;
     }
     fs.writeFileSync(planPath, text, 'utf8');
+    markSidecarCurrent(planPath);
   } catch (err) {
     console.error('[typewriter] could not sync markdown:', err.message);
+  }
+}
+
+/**
+ * Stamp the sidecar as current with respect to its markdown. The sidecar is
+ * always written first so it survives a crash mid-pair, which leaves it
+ * looking older than the markdown the instant that markdown write lands;
+ * this re-marks it once the pair is consistent, so listing can keep
+ * trusting the cache instead of taking the re-parse fallback forever.
+ */
+function markSidecarCurrent(planPath) {
+  try {
+    const now = new Date();
+    fs.utimesSync(sidecarPath(planPath), now, now);
+  } catch {
+    // Best effort: worst case the plan just falls back to re-parsing next time.
   }
 }
 
@@ -262,5 +279,6 @@ module.exports = {
   writeSidecar,
   loadPlan,
   syncMarkdownToItems,
+  markSidecarCurrent,
   listPlans,
 };

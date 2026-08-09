@@ -207,6 +207,7 @@ ipcMain.handle('tw:toggle', async (_e, { index, done } = {}) => {
     const text = fs.readFileSync(planPath, 'utf8');
     const res = md.setTask(text, index, !!done);
     if (res) fs.writeFileSync(planPath, res.text, 'utf8');
+    lib.markSidecarCurrent(planPath);
 
     return { ok: true, at: plan.items[index].at };
   } catch (err) {
