@@ -49,8 +49,16 @@ Pure refactor. No behaviour change. This exists to make everything after it test
 In `package.json`, add to `scripts`:
 
 ```json
-"test": "node --test test/"
+"test": "node --test \"test/*.test.js\""
 ```
+
+Two forms that look right are wrong here. `node --test test/` (a bare directory
+argument) fails on Node 24 / Windows with an opaque `'test failed'` before
+running anything. Bare `node --test` works, but its default discovery includes
+`**/test/**/*.js`, which would sweep up the CDP harness added in Task 7 and
+launch a real window during the unit run. The quoted glob matches only direct
+`*.test.js` children; Node expands it itself, so it behaves the same whichever
+shell npm uses.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -300,7 +308,7 @@ const cfgStore = require('./config');
 const lib = require('./library');
 ```
 
-Then update each call site. There are exactly eight, at these lines in the current file:
+Then update each call site. Eight distinct functions are called, across **14 occurrences** — several are called more than once. Match on the call expression, not on a line number, and finish by confirming `grep -n "store\." src/main/main.js` prints nothing. First occurrence of each:
 
 | Line | Was | Becomes |
 |---|---|---|
@@ -1346,9 +1354,11 @@ In `package.json`, add to `scripts`:
 "test:ui": "node test/integration/shelf.cdp.js"
 ```
 
-`npm test` stays unit-only — `node --test test/` ignores subdirectories it is
-not pointed at, and the CDP harness must not run in the unit sweep because it
-launches a real window.
+`npm test` stays unit-only because Task 1 set it to `node --test "test/*.test.js"`,
+which matches only direct `*.test.js` children of `test/`. Do not "simplify" it to
+a bare `node --test` — that form's default discovery includes `**/test/**/*.js`
+and would launch this harness's real window during the unit run. After adding the
+script, confirm `npm test` still reports 19 tests and does not open a window.
 
 - [ ] **Step 3: Write the CDP harness**
 
