@@ -153,19 +153,39 @@ function syncMarkdownToItems(planPath, items) {
   }
 }
 
+/**
+ * The sidecar's cached count/tasks are only trustworthy if they were written
+ * at or after the markdown's last change. Users edit these .md files by hand,
+ * so a stale cache is a realistic case, not a corner case.
+ */
+function isSidecarFresh(planPath) {
+  try {
+    const planStat = fs.statSync(planPath);
+    const sideStat = fs.statSync(sidecarPath(planPath));
+    return sideStat.mtimeMs >= planStat.mtimeMs;
+  } catch {
+    return false; // Can't prove the cache is current, so don't trust it.
+  }
+}
+
 /** Summarise one stored plan for the shelf, or null if it is not a usable plan. */
 function summarise(planPath, activePlan) {
   const side = readSidecar(planPath);
+  const fresh = !!side && isSidecarFresh(planPath);
 
-  let title = side && side.title;
-  let total = side && Number.isInteger(side.count) ? side.count : null;
+  let title = fresh ? side.title : null;
+  // A non-positive or non-integer count is as unusable as a missing one —
+  // trusting it would silently hide a real plan behind a false "no tasks".
+  let total = fresh && Number.isInteger(side.count) && side.count > 0 ? side.count : null;
   let done = null;
 
-  if (side && side.tasks && total !== null) {
+  if (fresh && side.tasks && total !== null) {
     done = Object.values(side.tasks).filter((t) => t && t.done).length;
   }
 
-  // No usable sidecar (or a pre-upgrade one): fall back to the markdown itself.
+  // No usable sidecar (missing, stale, pre-upgrade, or a bad count): fall
+  // back to the markdown itself. loadPlan also rewrites the sidecar, so the
+  // cache is fresh again by the time this plan is next listed.
   if (!title || total === null || done === null) {
     const plan = loadPlan(planPath);
     if (!plan) return null;
@@ -176,8 +196,11 @@ function summarise(planPath, activePlan) {
 
   if (!total) return null; // A plan with no tasks is not a plan.
 
+  // touchedAt is a cached "last worked on" marker, not derived from the
+  // markdown, so staleness doesn't apply — but a corrupted value would still
+  // poison the sort (Date.parse -> NaN), so treat unparseable the same as absent.
   let touchedAt = side && side.touchedAt;
-  if (!touchedAt) {
+  if (!touchedAt || Number.isNaN(Date.parse(touchedAt))) {
     try {
       touchedAt = fs.statSync(planPath).mtime.toISOString();
     } catch {

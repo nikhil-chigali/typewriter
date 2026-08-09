@@ -216,3 +216,68 @@ test('listPlans skips files that are not plans and never deletes them', () => {
 test('listPlans returns an empty array for a missing folder', () => {
   assert.deepEqual(lib.listPlans(path.join(tmpDir(), 'nope')), []);
 });
+
+test('listPlans re-parses when a task is appended to the markdown by hand', () => {
+  const dir = tmpDir();
+  const p = seedPlan(dir, 'stale.md', 'Stale Plan', [false, false], '2026-01-01T00:00:00.000Z');
+  // seedPlan's sidecar reports 0/2; now hand-append a third, already-checked
+  // task the way a user would in their own editor, without going through
+  // writeSidecar. (An append, not a re-check of an existing line: the sidecar
+  // is deliberately authoritative for indices it already knows about — see
+  // "the sidecar wins over the markdown when they disagree" — this is about a
+  // brand-new index the sidecar has never seen.)
+  fs.appendFileSync(p, '- [x] task 3 (done 2026-01-01 09:00)\n');
+
+  // Force the markdown to be unambiguously newer than the sidecar, since
+  // filesystem mtime resolution is too coarse to rely on write order alone.
+  const sideStat = fs.statSync(lib.sidecarPath(p));
+  const planNewer = new Date(sideStat.mtime.getTime() + 5000);
+  fs.utimesSync(p, planNewer, planNewer);
+
+  const rows = lib.listPlans(dir);
+  const row = rows.find((r) => r.title === 'Stale Plan');
+  assert.equal(row.total, 3, 'the appended task is counted');
+  assert.equal(row.done, 1, "the appended task's checked state is picked up, not the stale cached count");
+});
+
+test('listPlans re-parses a sidecar that undercounts (count: 0) rather than hiding the plan', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'zero.md', '# Zero Count\n\n## Only\n- [ ] one\n- [x] two (done 2026-01-01 09:00)\n');
+  fs.writeFileSync(lib.sidecarPath(p), JSON.stringify({
+    plan: p,
+    title: 'Zero Count',
+    touchedAt: '2026-01-01T00:00:00.000Z',
+    archived: false,
+    count: 0,
+    tasks: {},
+  }), 'utf8');
+
+  const rows = lib.listPlans(dir);
+  const row = rows.find((r) => r.title === 'Zero Count');
+  assert.ok(row, 'the plan still appears despite the bad cached count');
+  assert.equal(row.total, 2);
+  assert.equal(row.done, 1);
+});
+
+test('listPlans falls back to file mtime when touchedAt cannot be parsed', () => {
+  const dir = tmpDir();
+  seedPlan(dir, 'aa-good.md', 'Good Date', [false], '2026-05-01T00:00:00.000Z');
+  const bad = seedPlan(dir, 'zz-bad.md', 'Bad Date', [false], '2026-01-01T00:00:00.000Z');
+
+  // Corrupt the touchedAt field only; leave count/tasks alone.
+  const sidePath = lib.sidecarPath(bad);
+  const side = JSON.parse(fs.readFileSync(sidePath, 'utf8'));
+  side.touchedAt = 'not-a-real-date';
+  fs.writeFileSync(sidePath, JSON.stringify(side), 'utf8');
+
+  // Pin the bad plan's file mtime to something clearly older than the good
+  // plan's touchedAt, so the fallback still sorts it below "Good Date".
+  const old = new Date('2020-01-01T00:00:00.000Z');
+  fs.utimesSync(bad, old, old);
+
+  const rows = lib.listPlans(dir);
+  const badRow = rows.find((r) => r.title === 'Bad Date');
+  assert.ok(!Number.isNaN(Date.parse(badRow.touchedAt)), 'garbage touchedAt is replaced with a parseable date');
+  assert.equal(badRow.touchedAt, old.toISOString());
+  assert.deepEqual(rows.map((r) => r.title), ['Good Date', 'Bad Date']);
+});
