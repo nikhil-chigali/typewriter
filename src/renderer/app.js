@@ -374,6 +374,7 @@ async function finish(note) {
   closeDialog();
   await api.complete(note).catch(() => null);
   await resetToIdle();
+  await toggleShelf();     // "new plan" means "pick the next one"
 }
 
 function openAbortDialog() {
@@ -392,6 +393,7 @@ async function abort(action) {
   closeDialog();
   await api.abort(action, doneCount(), items().length).catch(() => null);
   await resetToIdle();
+  await toggleShelf();
 }
 
 // ------------------------------------------------------------------ input
@@ -417,6 +419,9 @@ async function importResult(promise) {
     flash();
     return;
   }
+  if (S.plan) await lowerPaper();   // feed the current sheet out first
+  S.mode = 'focused';
+  S.priorMode = 'focused';
   await openPlan(res.plan, { animate: true });
 }
 
@@ -479,9 +484,30 @@ async function renderShelf() {
   updateStatus();
 }
 
-// Filled in by Task 6; drawing the shelf is reviewable on its own.
-function onPickPlan(planPath) {
-  console.log('[typewriter] pick', planPath);
+async function onPickPlan(planPath) {
+  if (S.busy) return;
+  if (S.plan && S.plan.path === planPath) {   // Already on the roller: just go back.
+    S.mode = S.priorMode;
+    render();
+    return;
+  }
+
+  S.busy = true;
+  const res = await api.switchPlan(planPath).catch(() => null);
+  S.busy = false;
+
+  if (!res || !res.ok) {
+    flash("couldn't open that plan :(");
+    return;
+  }
+
+  if (S.pending) clearTimeout(S.pending.timer);
+  S.pending = null;
+
+  await lowerPaper();          // feed the old sheet out…
+  S.mode = 'focused';
+  S.priorMode = 'focused';
+  await openPlan(res.plan, { animate: true });   // …and print the new one
 }
 
 function toggleSound() {
@@ -540,10 +566,11 @@ function wire() {
   el.shelf.addEventListener('click', toggleShelf);
   el.sound.addEventListener('click', toggleSound);
 
-  // Drag & drop — only meaningful while idle.
+  // Drag & drop works whether or not a plan is loaded — importResult feeds the
+  // current sheet out first when one is.
   document.addEventListener('dragover', (e) => {
     e.preventDefault();
-    if (!S.plan) el.tw.classList.add('dragover');
+    el.tw.classList.add('dragover');
   });
   document.addEventListener('dragleave', (e) => {
     if (e.relatedTarget === null) el.tw.classList.remove('dragover');
@@ -551,7 +578,6 @@ function wire() {
   document.addEventListener('drop', async (e) => {
     e.preventDefault();
     el.tw.classList.remove('dragover');
-    if (S.plan) return;
 
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return flash();
@@ -563,7 +589,7 @@ function wire() {
   });
 
   document.addEventListener('paste', async (e) => {
-    if (S.plan || isTyping(e.target)) return;
+    if (isTyping(e.target)) return;
     const text = e.clipboardData && e.clipboardData.getData('text/plain');
     if (!text || !text.trim()) return flash();
     await importResult(api.importText(text));
