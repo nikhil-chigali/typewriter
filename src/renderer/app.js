@@ -421,6 +421,9 @@ async function importResult(promise) {
 }
 
 function toggleMode() {
+  // While the shelf is open, focused/list doesn't describe what's on screen —
+  // the only coherent meaning of "change view" is "leave the shelf".
+  if (S.mode === 'shelf') { toggleShelf(); return; }
   if (!S.plan) return;
   S.mode = S.mode === 'list' ? 'focused' : 'list';
   api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
@@ -438,6 +441,8 @@ async function toggleShelf() {
       await lowerPaper();
       el.body.innerHTML = '';
       el.title.textContent = '';
+      el.idle.classList.remove('hidden');  // the shelf borrowed the idle prompt's space
+      measureTypewriter();                 // idle reappearing changes --tw-h, which caps the paper
       updateStatus();
       return;
     }
@@ -449,12 +454,20 @@ async function toggleShelf() {
 
   S.priorMode = S.mode;           // 'focused' or 'list' — never 'shelf' here
   S.mode = 'shelf';
+  // Hide the idle prompt so it doesn't sit under the shelf contradicting it — a
+  // plan already hides #idle, but this covers the more common idle-entry path.
+  el.idle.classList.add('hidden');
+  measureTypewriter();            // idle disappearing changes --tw-h, which caps the paper
   api.resize(H_FOCUSED);          // the shelf never grows the window
   await renderShelf();
 }
 
 async function renderShelf() {
   const res = await api.listPlans().catch(() => null);
+  // The shelf may have been closed while this was in flight (rapid open/close);
+  // painting a stale response over whatever view is now active would strand
+  // shelf rows on screen while the state says otherwise.
+  if (S.mode !== 'shelf') return;
   const plans = (res && res.plans) || [];
   el.paper.classList.remove('list', 'complete');
   el.paper.classList.remove('hidden');
