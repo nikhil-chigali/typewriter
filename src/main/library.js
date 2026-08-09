@@ -45,12 +45,28 @@ function readSidecar(planPath) {
   }
 }
 
-function writeSidecar(planPath, items) {
+/**
+ * Write the sidecar. `meta` may carry { title, touchedAt, archived }; anything
+ * omitted is preserved from the sidecar already on disk, so a routine toggle
+ * never clears the title or un-archives a plan.
+ */
+function writeSidecar(planPath, items, meta = {}) {
+  const prev = readSidecar(planPath) || {};
+
   const tasks = {};
   items.forEach((item, i) => {
     tasks[String(i)] = { done: !!item.done, at: item.done ? item.at || new Date().toISOString() : null };
   });
-  const payload = { plan: planPath, count: items.length, tasks };
+
+  const payload = {
+    plan: planPath,
+    title: meta.title ?? prev.title ?? null,
+    touchedAt: meta.touchedAt ?? prev.touchedAt ?? new Date().toISOString(),
+    archived: meta.archived ?? (prev.archived === true),
+    count: items.length,
+    tasks,
+  };
+
   try {
     fs.writeFileSync(sidecarPath(planPath), JSON.stringify(payload, null, 2), 'utf8');
     return true;
@@ -92,8 +108,25 @@ function loadPlan(planPath) {
     }
   });
 
-  if (!side || drifted || Number(side.count) !== parsed.items.length) {
-    writeSidecar(planPath, parsed.items);
+  // Sidecars written before the shelf existed lack these three fields.
+  const needsUpgrade = !side || !side.title || !side.touchedAt || side.archived === undefined;
+
+  let touchedAt = side && side.touchedAt;
+  if (!touchedAt) {
+    // Best available proxy for "when was this last worked on".
+    try {
+      touchedAt = fs.statSync(sidecarPath(planPath)).mtime.toISOString();
+    } catch {
+      touchedAt = new Date().toISOString();
+    }
+  }
+
+  if (needsUpgrade || drifted || Number(side && side.count) !== parsed.items.length) {
+    writeSidecar(planPath, parsed.items, {
+      title: parsed.title,
+      touchedAt,
+      archived: (side && side.archived) === true,
+    });
     syncMarkdownToItems(planPath, parsed.items);
   }
 

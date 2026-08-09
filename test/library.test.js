@@ -83,3 +83,60 @@ test('loadPlan returns null for something that is not a plan', () => {
   const p = writePlan(dir, 'notes.md', 'just some prose, no title, no tasks\n');
   assert.equal(lib.loadPlan(p), null);
 });
+
+test('a fresh sidecar carries title, touchedAt and archived', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'sample.md', PLAN);
+  lib.loadPlan(p);
+
+  const side = JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8'));
+  assert.equal(side.title, 'Sample Plan');
+  assert.equal(side.archived, false);
+  assert.ok(!Number.isNaN(Date.parse(side.touchedAt)), 'touchedAt is an ISO date');
+});
+
+test('an old three-field sidecar is upgraded without losing progress', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'sample.md', PLAN);
+
+  // The shape shipped before this feature.
+  fs.writeFileSync(lib.sidecarPath(p), JSON.stringify({
+    plan: p,
+    count: 2,
+    tasks: { 0: { done: true, at: '2026-01-05T10:00:00.000Z' }, 1: { done: false, at: null } },
+  }), 'utf8');
+
+  const plan = lib.loadPlan(p);
+  assert.equal(plan.items[0].done, true, 'progress survives the upgrade');
+  assert.equal(plan.items[1].done, false);
+
+  const side = JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8'));
+  assert.equal(side.title, 'Sample Plan');
+  assert.equal(side.archived, false);
+  assert.ok(!Number.isNaN(Date.parse(side.touchedAt)));
+});
+
+test('writeSidecar preserves archived unless told otherwise', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'sample.md', PLAN);
+  const plan = lib.loadPlan(p);
+
+  lib.writeSidecar(p, plan.items, { archived: true });
+  assert.equal(JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8')).archived, true);
+
+  // A later toggle must not silently un-archive the plan.
+  lib.writeSidecar(p, plan.items);
+  assert.equal(JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8')).archived, true);
+});
+
+test('touchedAt moves forward when a task is toggled', () => {
+  const dir = tmpDir();
+  const p = writePlan(dir, 'sample.md', PLAN);
+  const plan = lib.loadPlan(p);
+
+  lib.writeSidecar(p, plan.items, { touchedAt: '2020-01-01T00:00:00.000Z' });
+  lib.writeSidecar(p, plan.items, { touchedAt: new Date().toISOString() });
+
+  const side = JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8'));
+  assert.ok(Date.parse(side.touchedAt) > Date.parse('2020-01-01T00:00:00.000Z'));
+});
