@@ -205,6 +205,12 @@ async function openPlan(plan, { animate = true } = {}) {
   S.plan = plan;
   S.mode = 'focused';
   S.celebrated = false;
+  // Every path that lands a new plan on the roller — switch, import, or the
+  // launch restore — funnels through here, so retiring a leftover advance
+  // timer here (rather than in each caller) is the one place it can't be
+  // forgotten. Left running, it would fire against this plan instead of the
+  // one that scheduled it.
+  if (S.pending) clearTimeout(S.pending.timer);
   S.pending = null;
 
   el.idle.classList.add('hidden');
@@ -399,13 +405,23 @@ async function abort(action) {
 // ------------------------------------------------------------------ input
 
 function flash(message = "couldn't read this plan :(") {
-  el.idleSub.textContent = message;
-  el.idleSub.classList.add('error');
   el.tw.classList.remove('shake');
   void el.tw.offsetWidth; // restart the animation
   el.tw.classList.add('shake');
-
   clearTimeout(flash.t);
+
+  // #idle-sub sits inside #idle, which is hidden whenever a plan is loaded or
+  // the shelf is open — the only ways to reach a switch failure. Writing the
+  // message there would shake the typewriter with nothing visible to explain
+  // why, so route it through the toast instead.
+  if (el.idle.classList.contains('hidden')) {
+    toast(message);
+    flash.t = setTimeout(() => el.tw.classList.remove('shake'), 2500);
+    return;
+  }
+
+  el.idleSub.textContent = message;
+  el.idleSub.classList.add('error');
   flash.t = setTimeout(() => {
     el.idleSub.textContent = IDLE_SUB;
     el.idleSub.classList.remove('error');
@@ -414,15 +430,25 @@ function flash(message = "couldn't read this plan :(") {
 }
 
 async function importResult(promise) {
-  const res = await promise.catch(() => null);
-  if (!res || !res.ok) {
-    flash();
-    return;
+  // The IPC call behind `promise` was already fired by the caller, but a
+  // switch or another import already has the roller — let that one finish
+  // rather than racing it. Set busy synchronously, before the first await,
+  // so a second drop/paste dispatched while this one is in flight sees it.
+  if (S.busy) { promise.catch(() => {}); return; }
+  S.busy = true;
+  try {
+    const res = await promise.catch(() => null);
+    if (!res || !res.ok) {
+      flash();
+      return;
+    }
+    if (S.plan) await lowerPaper();   // feed the current sheet out first
+    S.mode = 'focused';
+    S.priorMode = 'focused';
+    await openPlan(res.plan, { animate: true });
+  } finally {
+    S.busy = false;
   }
-  if (S.plan) await lowerPaper();   // feed the current sheet out first
-  S.mode = 'focused';
-  S.priorMode = 'focused';
-  await openPlan(res.plan, { animate: true });
 }
 
 function toggleMode() {
@@ -486,28 +512,32 @@ async function renderShelf() {
 
 async function onPickPlan(planPath) {
   if (S.busy) return;
-  if (S.plan && S.plan.path === planPath) {   // Already on the roller: just go back.
-    S.mode = S.priorMode;
+  if (S.plan && S.plan.path === planPath) {
+    // Opening the shelf always drops to the focused height, so returning to a
+    // prior list view without resizing renders the list clipped.
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
     render();
     return;
   }
 
   S.busy = true;
-  const res = await api.switchPlan(planPath).catch(() => null);
-  S.busy = false;
+  try {
+    const res = await api.switchPlan(planPath).catch(() => null);
+    if (!res || !res.ok) {
+      flash("couldn't open that plan :(");
+      return;
+    }
 
-  if (!res || !res.ok) {
-    flash("couldn't open that plan :(");
-    return;
+    await lowerPaper();          // feed the old sheet out…
+    S.mode = 'focused';
+    S.priorMode = 'focused';
+    await openPlan(res.plan, { animate: true });   // …and print the new one
+  } finally {
+    // Released only once the switch is fully settled — while it's in flight,
+    // a second row click (or a drop/paste) must not start a competing switch.
+    S.busy = false;
   }
-
-  if (S.pending) clearTimeout(S.pending.timer);
-  S.pending = null;
-
-  await lowerPaper();          // feed the old sheet out…
-  S.mode = 'focused';
-  S.priorMode = 'focused';
-  await openPlan(res.plan, { animate: true });   // …and print the new one
 }
 
 function toggleSound() {
@@ -578,6 +608,7 @@ function wire() {
   document.addEventListener('drop', async (e) => {
     e.preventDefault();
     el.tw.classList.remove('dragover');
+    if (S.busy) return;   // a switch or another import already has the roller
 
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return flash();
@@ -589,7 +620,7 @@ function wire() {
   });
 
   document.addEventListener('paste', async (e) => {
-    if (isTyping(e.target)) return;
+    if (isTyping(e.target) || S.busy) return;
     const text = e.clipboardData && e.clipboardData.getData('text/plain');
     if (!text || !text.trim()) return flash();
     await importResult(api.importText(text));
