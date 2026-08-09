@@ -140,3 +140,79 @@ test('touchedAt moves forward when a task is toggled', () => {
   const side = JSON.parse(fs.readFileSync(lib.sidecarPath(p), 'utf8'));
   assert.ok(Date.parse(side.touchedAt) > Date.parse('2020-01-01T00:00:00.000Z'));
 });
+
+function seedPlan(dir, name, title, states, touchedAt, archived = false) {
+  const body = `# ${title}\n\n## Only\n` +
+    states.map((d, i) => `- [${d ? 'x' : ' '}] task ${i + 1}${d ? ' (done 2026-01-01 09:00)' : ''}`).join('\n') + '\n';
+  const p = writePlan(dir, name, body);
+  const plan = lib.loadPlan(p);
+  lib.writeSidecar(p, plan.items, { title, touchedAt, archived });
+  return p;
+}
+
+test('listPlans orders live plans by most recently touched', () => {
+  const dir = tmpDir();
+  seedPlan(dir, 'old.md', 'Old Stream', [false, false], '2026-01-01T00:00:00.000Z');
+  seedPlan(dir, 'new.md', 'New Stream', [false, false], '2026-06-01T00:00:00.000Z');
+  seedPlan(dir, 'mid.md', 'Mid Stream', [false, false], '2026-03-01T00:00:00.000Z');
+
+  const rows = lib.listPlans(dir);
+  assert.deepEqual(rows.map((r) => r.title), ['New Stream', 'Mid Stream', 'Old Stream']);
+});
+
+test('finished plans sort below live ones', () => {
+  const dir = tmpDir();
+  seedPlan(dir, 'done.md', 'All Done', [true, true], '2026-09-01T00:00:00.000Z');
+  seedPlan(dir, 'gone.md', 'Abandoned', [true, false], '2026-08-01T00:00:00.000Z', true);
+  seedPlan(dir, 'live.md', 'Still Going', [false, false], '2026-01-01T00:00:00.000Z');
+
+  const rows = lib.listPlans(dir);
+  assert.deepEqual(rows.map((r) => r.title), ['Still Going', 'All Done', 'Abandoned']);
+  assert.deepEqual(rows.map((r) => r.finished), [false, true, true]);
+
+  const complete = rows.find((r) => r.title === 'All Done');
+  assert.equal(complete.complete, true);
+  assert.equal(complete.archived, false);
+  assert.equal(complete.done, 2);
+  assert.equal(complete.total, 2);
+
+  const abandoned = rows.find((r) => r.title === 'Abandoned');
+  assert.equal(abandoned.complete, false, 'archived but not every task is ticked');
+  assert.equal(abandoned.archived, true);
+  assert.equal(abandoned.done, 1);
+});
+
+test('listPlans marks the active plan', () => {
+  const dir = tmpDir();
+  const a = seedPlan(dir, 'a.md', 'Alpha', [false], '2026-01-01T00:00:00.000Z');
+  seedPlan(dir, 'b.md', 'Beta', [false], '2026-02-01T00:00:00.000Z');
+
+  const rows = lib.listPlans(dir, a);
+  assert.equal(rows.find((r) => r.title === 'Alpha').active, true);
+  assert.equal(rows.find((r) => r.title === 'Beta').active, false);
+});
+
+test('listPlans adopts a bare .md that has no sidecar', () => {
+  const dir = tmpDir();
+  writePlan(dir, 'bare.md', '# Bare Plan\n\n- [ ] one\n- [x] two (done 2026-01-01 09:00)\n');
+
+  const rows = lib.listPlans(dir);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, 'Bare Plan');
+  assert.equal(rows[0].done, 1);
+  assert.equal(rows[0].total, 2);
+});
+
+test('listPlans skips files that are not plans and never deletes them', () => {
+  const dir = tmpDir();
+  seedPlan(dir, 'good.md', 'Good', [false], '2026-01-01T00:00:00.000Z');
+  const junk = writePlan(dir, 'notes.md', 'prose with no title and no tasks\n');
+
+  const rows = lib.listPlans(dir);
+  assert.deepEqual(rows.map((r) => r.title), ['Good']);
+  assert.ok(fs.existsSync(junk), 'the unrecognised file is left alone');
+});
+
+test('listPlans returns an empty array for a missing folder', () => {
+  assert.deepEqual(lib.listPlans(path.join(tmpDir(), 'nope')), []);
+});

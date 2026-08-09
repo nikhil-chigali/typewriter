@@ -153,6 +153,84 @@ function syncMarkdownToItems(planPath, items) {
   }
 }
 
+/** Summarise one stored plan for the shelf, or null if it is not a usable plan. */
+function summarise(planPath, activePlan) {
+  const side = readSidecar(planPath);
+
+  let title = side && side.title;
+  let total = side && Number.isInteger(side.count) ? side.count : null;
+  let done = null;
+
+  if (side && side.tasks && total !== null) {
+    done = Object.values(side.tasks).filter((t) => t && t.done).length;
+  }
+
+  // No usable sidecar (or a pre-upgrade one): fall back to the markdown itself.
+  if (!title || total === null || done === null) {
+    const plan = loadPlan(planPath);
+    if (!plan) return null;
+    title = plan.title;
+    total = plan.items.length;
+    done = plan.items.filter((i) => i.done).length;
+  }
+
+  if (!total) return null; // A plan with no tasks is not a plan.
+
+  let touchedAt = side && side.touchedAt;
+  if (!touchedAt) {
+    try {
+      touchedAt = fs.statSync(planPath).mtime.toISOString();
+    } catch {
+      touchedAt = new Date(0).toISOString();
+    }
+  }
+
+  const archived = !!(side && side.archived);
+  const complete = done === total;
+
+  return {
+    path: planPath,
+    title,
+    done,
+    total,
+    complete,
+    archived,
+    finished: complete || archived,
+    touchedAt,
+    active: activePlan ? path.resolve(activePlan) === path.resolve(planPath) : false,
+  };
+}
+
+/**
+ * Every plan in the records folder, live ones first, each group ordered by
+ * most recently touched. The folder is the source of truth: files that do not
+ * parse are skipped, never removed.
+ */
+function listPlans(recordsDir, activePlan = null) {
+  let names;
+  try {
+    names = fs.readdirSync(recordsDir).filter((n) => /\.md$/i.test(n));
+  } catch {
+    return []; // Unreadable folder yields an empty shelf, not an error.
+  }
+
+  const rows = [];
+  for (const name of names) {
+    try {
+      const row = summarise(path.join(recordsDir, name), activePlan);
+      if (row) rows.push(row);
+    } catch (err) {
+      console.error('[typewriter] skipping', name, err.message);
+    }
+  }
+
+  rows.sort((a, b) => {
+    if (a.finished !== b.finished) return a.finished ? 1 : -1;
+    return Date.parse(b.touchedAt) - Date.parse(a.touchedAt);
+  });
+  return rows;
+}
+
 module.exports = {
   isInside,
   sidecarPath,
@@ -161,4 +239,5 @@ module.exports = {
   writeSidecar,
   loadPlan,
   syncMarkdownToItems,
+  listPlans,
 };
