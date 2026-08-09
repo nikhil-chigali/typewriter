@@ -9,11 +9,13 @@ const IDLE_SUB = 'drag & drop a .md file or paste (⌘V)';
 
 const S = {
   plan: null,        // { path, name, title, items: [{ text, done, at, section }] }
-  mode: 'focused',   // 'focused' | 'list'
+  mode: 'focused',   // 'focused' | 'list' | 'shelf'
+  priorMode: 'focused',  // the view the shelf was opened from
   focusIdx: null,
   celebrated: false,
   pending: null,     // { idx, timer } — a scheduled advance the user can still undo
   busy: false,
+  shelfCount: 0,
 };
 
 const el = {};
@@ -120,6 +122,7 @@ function buildList() {
 }
 
 function render(opts) {
+  if (S.mode === 'shelf') { renderShelf(); return; }   // must precede the !S.plan guard
   if (!S.plan) return;
   el.title.textContent = `··· ${S.plan.title} ···`;
   el.title.title = S.plan.title;
@@ -131,7 +134,12 @@ function render(opts) {
 }
 
 function updateStatus() {
-  el.counter.textContent = `${doneCount()}/${items().length} done`;
+  if (S.mode === 'shelf') {
+    const n = S.shelfCount || 0;
+    el.counter.textContent = n === 0 ? 'no plans' : `${n} plan${n === 1 ? '' : 's'}`;
+  } else {
+    el.counter.textContent = `${doneCount()}/${items().length} done`;
+  }
 
   const list = S.mode === 'list';
   el.view.textContent = list ? '●' : '≡';
@@ -420,6 +428,49 @@ function toggleMode() {
   if (S.mode === 'list') el.paper.scrollTop = 0;
 }
 
+async function toggleShelf() {
+  if (S.mode === 'shelf') {
+    // Leaving the shelf with nothing on the roller: feed the sheet back down
+    // to the idle state rather than calling render(), which bails when there
+    // is no plan and would strand the shelf on screen.
+    if (!S.plan) {
+      S.mode = 'focused';
+      await lowerPaper();
+      el.body.innerHTML = '';
+      el.title.textContent = '';
+      updateStatus();
+      return;
+    }
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);  // restore the list height
+    render();
+    return;
+  }
+
+  S.priorMode = S.mode;           // 'focused' or 'list' — never 'shelf' here
+  S.mode = 'shelf';
+  api.resize(H_FOCUSED);          // the shelf never grows the window
+  await renderShelf();
+}
+
+async function renderShelf() {
+  const res = await api.listPlans().catch(() => null);
+  const plans = (res && res.plans) || [];
+  el.paper.classList.remove('list', 'complete');
+  el.paper.classList.remove('hidden');
+  setPaperY(0);
+  el.title.textContent = '··· YOUR PLANS ···';
+  el.title.title = 'Your plans';
+  Shelf.render(el.body, plans, onPickPlan);
+  S.shelfCount = plans.length;
+  updateStatus();
+}
+
+// Filled in by Task 6; drawing the shelf is reviewable on its own.
+function onPickPlan(planPath) {
+  console.log('[typewriter] pick', planPath);
+}
+
 function toggleSound() {
   const muted = !Sound.isMuted();
   Sound.setMuted(muted);
@@ -473,6 +524,7 @@ function isTyping(target) {
 
 function wire() {
   el.view.addEventListener('click', toggleMode);
+  el.shelf.addEventListener('click', toggleShelf);
   el.sound.addEventListener('click', toggleSound);
 
   // Drag & drop — only meaningful while idle.
@@ -538,6 +590,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     keys: document.getElementById('keys'),
     counter: document.getElementById('counter'),
     view: document.getElementById('view-toggle'),
+    shelf: document.getElementById('shelf-toggle'),
     sound: document.getElementById('sound-toggle'),
     modal: document.getElementById('modal'),
     dlgTitle: document.getElementById('dialog-title'),
