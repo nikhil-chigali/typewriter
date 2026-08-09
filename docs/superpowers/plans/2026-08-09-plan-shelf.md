@@ -1211,8 +1211,12 @@ Replace the stub from Task 5:
 ```js
 async function onPickPlan(planPath) {
   if (S.busy) return;
-  if (S.plan && S.plan.path === planPath) {   // Already on the roller: just go back.
-    S.mode = S.priorMode;
+  // Already on the roller: just go back, restoring the height the prior view needs.
+  // Opening the shelf always drops to H_FOCUSED, so returning to `list` without
+  // resizing would render the full list clipped into a 720px window.
+  if (S.plan && S.plan.path === planPath) {
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
     render();
     return;
   }
