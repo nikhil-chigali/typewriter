@@ -163,11 +163,16 @@ In the renderer, `app.js` (528 lines) would balloon with shelf rendering:
 
 | Channel | Direction | Returns |
 |---|---|---|
-| `tw:list-plans` | invoke | `[{ path, title, done, total, archived, complete, touchedAt, active }]` |
+| `tw:list-plans` | invoke | `{ ok, plans: [{ path, title, done, total, complete, archived, finished, touchedAt, active }] }` |
 | `tw:switch-plan` | invoke | `{ ok, plan }` or `{ ok: false, error }` |
 
-`tw:init` additionally returns `planCount`, the number of stored plans, so the
-renderer can tell a genuine first run from a launch with plans but none active.
+`tw:init` returns what it always did. An earlier draft of this spec had it also
+return `planCount` so the renderer could tell a genuine first run from a launch
+with plans but none active. No consumer for that was ever built, and computing it
+meant scanning the whole records folder on every launch — which is what turned a
+latent bug in `listPlans` into a data-loss one, since listing was writing at the
+time. It was removed before merge. If the distinction is ever genuinely needed,
+derive it from a `tw:list-plans` call the renderer already makes.
 
 ## Error handling
 
