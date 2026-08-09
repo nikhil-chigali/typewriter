@@ -1,12 +1,18 @@
 'use strict';
 
-// Narrow IPC surface. The renderer gets these seven calls and nothing else.
+// Narrow IPC surface. The renderer gets these twelve calls and nothing else.
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('typewriter', {
   /** Resolve records dir (picker on first run) and restore the active plan. */
   init: () => ipcRenderer.invoke('tw:init'),
+
+  /** Every stored plan, live ones first. */
+  listPlans: () => ipcRenderer.invoke('tw:list-plans'),
+
+  /** Make a stored plan the active one. */
+  switchPlan: (planPath) => ipcRenderer.invoke('tw:switch-plan', planPath),
 
   importFile: (filePath) => ipcRenderer.invoke('tw:import-file', filePath),
   importText: (text) => ipcRenderer.invoke('tw:import-text', text),

@@ -10,3 +10,6 @@ build/icon.ico
 Thumbs.db
 Desktop.ini
 *.log
+
+# Subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/

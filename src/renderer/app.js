@@ -9,11 +9,13 @@ const IDLE_SUB = 'drag & drop a .md file or paste (⌘V)';
 
 const S = {
   plan: null,        // { path, name, title, items: [{ text, done, at, section }] }
-  mode: 'focused',   // 'focused' | 'list'
+  mode: 'focused',   // 'focused' | 'list' | 'shelf'
+  priorMode: 'focused',  // the view the shelf was opened from
   focusIdx: null,
   celebrated: false,
   pending: null,     // { idx, timer } — a scheduled advance the user can still undo
   busy: false,
+  shelfCount: 0,
 };
 
 const el = {};
@@ -120,9 +122,11 @@ function buildList() {
 }
 
 function render(opts) {
+  if (S.mode === 'shelf') { renderShelf(); return; }   // must precede the !S.plan guard
   if (!S.plan) return;
   el.title.textContent = `··· ${S.plan.title} ···`;
   el.title.title = S.plan.title;
+  el.paper.classList.remove('shelf');
   el.paper.classList.toggle('list', S.mode === 'list');
   el.paper.classList.toggle('complete', allDone());
   if (S.mode === 'list') buildList();
@@ -131,7 +135,12 @@ function render(opts) {
 }
 
 function updateStatus() {
-  el.counter.textContent = `${doneCount()}/${items().length} done`;
+  if (S.mode === 'shelf') {
+    const n = S.shelfCount || 0;
+    el.counter.textContent = n === 0 ? 'no plans' : `${n} plan${n === 1 ? '' : 's'}`;
+  } else {
+    el.counter.textContent = `${doneCount()}/${items().length} done`;
+  }
 
   const list = S.mode === 'list';
   el.view.textContent = list ? '●' : '≡';
@@ -197,6 +206,12 @@ async function openPlan(plan, { animate = true } = {}) {
   S.plan = plan;
   S.mode = 'focused';
   S.celebrated = false;
+  // Every path that lands a new plan on the roller — switch, import, or the
+  // launch restore — funnels through here, so retiring a leftover advance
+  // timer here (rather than in each caller) is the one place it can't be
+  // forgotten. Left running, it would fire against this plan instead of the
+  // one that scheduled it.
+  if (S.pending) clearTimeout(S.pending.timer);
   S.pending = null;
 
   el.idle.classList.add('hidden');
@@ -306,7 +321,7 @@ async function resetToIdle() {
   if (S.pending) clearTimeout(S.pending.timer);
   S.pending = null;
 
-  el.paper.classList.remove('list', 'complete');
+  el.paper.classList.remove('list', 'complete', 'shelf');
   await lowerPaper();
 
   S.plan = null;
@@ -366,6 +381,7 @@ async function finish(note) {
   closeDialog();
   await api.complete(note).catch(() => null);
   await resetToIdle();
+  await toggleShelf();     // "new plan" means "pick the next one"
 }
 
 function openAbortDialog() {
@@ -384,18 +400,29 @@ async function abort(action) {
   closeDialog();
   await api.abort(action, doneCount(), items().length).catch(() => null);
   await resetToIdle();
+  await toggleShelf();
 }
 
 // ------------------------------------------------------------------ input
 
 function flash(message = "couldn't read this plan :(") {
-  el.idleSub.textContent = message;
-  el.idleSub.classList.add('error');
   el.tw.classList.remove('shake');
   void el.tw.offsetWidth; // restart the animation
   el.tw.classList.add('shake');
-
   clearTimeout(flash.t);
+
+  // #idle-sub sits inside #idle, which is hidden whenever a plan is loaded or
+  // the shelf is open — the only ways to reach a switch failure. Writing the
+  // message there would shake the typewriter with nothing visible to explain
+  // why, so route it through the toast instead.
+  if (el.idle.classList.contains('hidden')) {
+    toast(message);
+    flash.t = setTimeout(() => el.tw.classList.remove('shake'), 2500);
+    return;
+  }
+
+  el.idleSub.textContent = message;
+  el.idleSub.classList.add('error');
   flash.t = setTimeout(() => {
     el.idleSub.textContent = IDLE_SUB;
     el.idleSub.classList.remove('error');
@@ -404,20 +431,116 @@ function flash(message = "couldn't read this plan :(") {
 }
 
 async function importResult(promise) {
-  const res = await promise.catch(() => null);
-  if (!res || !res.ok) {
-    flash();
-    return;
+  // The IPC call behind `promise` was already fired by the caller, but a
+  // switch or another import already has the roller — let that one finish
+  // rather than racing it. Set busy synchronously, before the first await,
+  // so a second drop/paste dispatched while this one is in flight sees it.
+  if (S.busy) { promise.catch(() => {}); return; }
+  S.busy = true;
+  try {
+    const res = await promise.catch(() => null);
+    if (!res || !res.ok) {
+      flash();
+      return;
+    }
+    if (S.plan) await lowerPaper();   // feed the current sheet out first
+    S.mode = 'focused';
+    S.priorMode = 'focused';
+    await openPlan(res.plan, { animate: true });
+  } finally {
+    S.busy = false;
   }
-  await openPlan(res.plan, { animate: true });
 }
 
 function toggleMode() {
+  // While the shelf is open, focused/list doesn't describe what's on screen —
+  // the only coherent meaning of "change view" is "leave the shelf".
+  if (S.mode === 'shelf') { toggleShelf(); return; }
   if (!S.plan) return;
   S.mode = S.mode === 'list' ? 'focused' : 'list';
   api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
   render();                      // rebuilt in place — the print animation never replays
   if (S.mode === 'list') el.paper.scrollTop = 0;
+}
+
+async function toggleShelf() {
+  if (S.mode === 'shelf') {
+    // Leaving the shelf with nothing on the roller: feed the sheet back down
+    // to the idle state rather than calling render(), which bails when there
+    // is no plan and would strand the shelf on screen.
+    if (!S.plan) {
+      S.mode = 'focused';
+      el.paper.classList.remove('shelf');
+      await lowerPaper();
+      el.body.innerHTML = '';
+      el.title.textContent = '';
+      el.idle.classList.remove('hidden');  // the shelf borrowed the idle prompt's space
+      measureTypewriter();                 // idle reappearing changes --tw-h, which caps the paper
+      updateStatus();
+      return;
+    }
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);  // restore the list height
+    render();
+    return;
+  }
+
+  S.priorMode = S.mode;           // 'focused' or 'list' — never 'shelf' here
+  S.mode = 'shelf';
+  // Hide the idle prompt so it doesn't sit under the shelf contradicting it — a
+  // plan already hides #idle, but this covers the more common idle-entry path.
+  el.idle.classList.add('hidden');
+  measureTypewriter();            // idle disappearing changes --tw-h, which caps the paper
+  api.resize(H_FOCUSED);          // the shelf never grows the window
+  await renderShelf();
+}
+
+async function renderShelf() {
+  const res = await api.listPlans().catch(() => null);
+  // The shelf may have been closed while this was in flight (rapid open/close);
+  // painting a stale response over whatever view is now active would strand
+  // shelf rows on screen while the state says otherwise.
+  if (S.mode !== 'shelf') return;
+  const plans = (res && res.plans) || [];
+  el.paper.classList.remove('list', 'complete');
+  el.paper.classList.add('shelf');   // the sheet scrolls here, so it must not be a drag region
+  el.paper.classList.remove('hidden');
+  setPaperY(0);
+  el.title.textContent = '··· YOUR PLANS ···';
+  el.title.title = 'Your plans';
+  Shelf.render(el.body, plans, onPickPlan);
+  S.shelfCount = plans.length;
+  updateStatus();
+}
+
+async function onPickPlan(planPath) {
+  if (S.busy) return;
+  if (S.plan && S.plan.path === planPath) {
+    // Opening the shelf always drops to the focused height, so returning to a
+    // prior list view without resizing renders the list clipped.
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
+    render();
+    return;
+  }
+
+  S.busy = true;
+  try {
+    const res = await api.switchPlan(planPath).catch(() => null);
+    if (!res || !res.ok) {
+      flash("couldn't open that plan :(");
+      return;
+    }
+
+    await lowerPaper();          // feed the old sheet out…
+    S.mode = 'focused';
+    S.priorMode = 'focused';
+    await openPlan(res.plan, { animate: true });   // …and print the new one
+  } finally {
+    // Released only once the switch is fully settled — while it's in flight,
+    // a second row click (or a drop/paste) must not start a competing switch.
+    S.busy = false;
+  }
 }
 
 function toggleSound() {
@@ -473,12 +596,14 @@ function isTyping(target) {
 
 function wire() {
   el.view.addEventListener('click', toggleMode);
+  el.shelf.addEventListener('click', toggleShelf);
   el.sound.addEventListener('click', toggleSound);
 
-  // Drag & drop — only meaningful while idle.
+  // Drag & drop works whether or not a plan is loaded — importResult feeds the
+  // current sheet out first when one is.
   document.addEventListener('dragover', (e) => {
     e.preventDefault();
-    if (!S.plan) el.tw.classList.add('dragover');
+    el.tw.classList.add('dragover');
   });
   document.addEventListener('dragleave', (e) => {
     if (e.relatedTarget === null) el.tw.classList.remove('dragover');
@@ -486,7 +611,7 @@ function wire() {
   document.addEventListener('drop', async (e) => {
     e.preventDefault();
     el.tw.classList.remove('dragover');
-    if (S.plan) return;
+    if (S.busy) return flash('one moment...');   // a switch or another import already has the roller
 
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return flash();
@@ -498,7 +623,8 @@ function wire() {
   });
 
   document.addEventListener('paste', async (e) => {
-    if (S.plan || isTyping(e.target)) return;
+    if (isTyping(e.target)) return;
+    if (S.busy) return flash('one moment...');   // a switch or another import already has the roller
     const text = e.clipboardData && e.clipboardData.getData('text/plain');
     if (!text || !text.trim()) return flash();
     await importResult(api.importText(text));
@@ -538,6 +664,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     keys: document.getElementById('keys'),
     counter: document.getElementById('counter'),
     view: document.getElementById('view-toggle'),
+    shelf: document.getElementById('shelf-toggle'),
     sound: document.getElementById('sound-toggle'),
     modal: document.getElementById('modal'),
     dlgTitle: document.getElementById('dialog-title'),

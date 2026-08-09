@@ -82,6 +82,14 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/*
+ * The shelf scrolls once it outgrows the 320px cap, and nothing is ever removed
+ * from it. Without this the sheet inherits the clip's drag region, so dragging
+ * the scrollbar thumb — or touching the group label, the hint or the gaps
+ * between rows — moves the window instead of the list.
+ */
+#paper.shelf { -webkit-app-region: no-drag; }
+
 #paper::-webkit-scrollbar { width: 4px; }
 #paper::-webkit-scrollbar-track { background: var(--cream); }
 #paper::-webkit-scrollbar-thumb { background: var(--red); }
@@ -221,6 +229,60 @@ body {
   padding: 10px 0 4px;
 }
 #paper.complete .all-done { display: block; }
+
+/* ---------------------------------------------------------------- shelf */
+
+.shelf-group {
+  font-size: 5px;
+  line-height: 1.6;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--red);
+  border-top: 1px dotted var(--red);
+  padding-top: 6px;
+  margin: 10px 0 6px;
+}
+
+.shelf-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 6px;
+  line-height: 1.6;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.shelf-row .mark {
+  flex: none;
+  width: 6px;
+  color: var(--red);
+}
+
+.shelf-row .name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-row .count {
+  flex: none;
+  color: var(--muted);
+}
+
+.shelf-row.finished .name { color: var(--muted); }
+.shelf-row.active .name { color: var(--red); }
+.shelf-row:hover .name { text-decoration: underline; }
+
+.shelf-hint {
+  font-size: 5px;
+  line-height: 1.8;
+  color: var(--muted);
+  text-align: center;
+  padding-top: 12px;
+}
 
 /* ------------------------------------------------------------ typewriter */
 

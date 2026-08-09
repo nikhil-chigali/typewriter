@@ -49,8 +49,16 @@ Pure refactor. No behaviour change. This exists to make everything after it test
 In `package.json`, add to `scripts`:
 
 ```json
-"test": "node --test test/"
+"test": "node --test \"test/*.test.js\""
 ```
+
+Two forms that look right are wrong here. `node --test test/` (a bare directory
+argument) fails on Node 24 / Windows with an opaque `'test failed'` before
+running anything. Bare `node --test` works, but its default discovery includes
+`**/test/**/*.js`, which would sweep up the CDP harness added in Task 7 and
+launch a real window during the unit run. The quoted glob matches only direct
+`*.test.js` children; Node expands it itself, so it behaves the same whichever
+shell npm uses.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -300,7 +308,7 @@ const cfgStore = require('./config');
 const lib = require('./library');
 ```
 
-Then update each call site. There are exactly eight, at these lines in the current file:
+Then update each call site. Eight distinct functions are called, across **14 occurrences** — several are called more than once. Match on the call expression, not on a line number, and finish by confirming `grep -n "store\." src/main/main.js` prints nothing. First occurrence of each:
 
 | Line | Was | Becomes |
 |---|---|---|
@@ -753,13 +761,12 @@ test('setArchived flips the flag and keeps the task state', () => {
 
 test('touchPlan floats a plan to the top of the shelf', () => {
   const dir = tmpDir();
-  seedPlan(dir, 'a.md', 'Alpha', [false], '2026-01-01T00:00:00.000Z');
-  const b = seedPlan(dir, 'b.md', 'Beta', [false], '2026-02-01T00:00:00.000Z');
+  const a = seedPlan(dir, 'a.md', 'Alpha', [false], '2026-01-01T00:00:00.000Z');
+  seedPlan(dir, 'b.md', 'Beta', [false], '2026-02-01T00:00:00.000Z');
 
   assert.deepEqual(lib.listPlans(dir).map((r) => r.title), ['Beta', 'Alpha']);
-  lib.touchPlan(path.join(dir, 'a.md'));
+  lib.touchPlan(a);
   assert.deepEqual(lib.listPlans(dir).map((r) => r.title), ['Alpha', 'Beta']);
-  assert.ok(b);
 });
 ```
 
@@ -1204,8 +1211,12 @@ Replace the stub from Task 5:
 ```js
 async function onPickPlan(planPath) {
   if (S.busy) return;
-  if (S.plan && S.plan.path === planPath) {   // Already on the roller: just go back.
-    S.mode = S.priorMode;
+  // Already on the roller: just go back, restoring the height the prior view needs.
+  // Opening the shelf always drops to H_FOCUSED, so returning to `list` without
+  // resizing would render the full list clipped into a 720px window.
+  if (S.plan && S.plan.path === planPath) {
+    S.mode = S.priorMode === 'list' ? 'list' : 'focused';
+    api.resize(S.mode === 'list' ? H_LIST : H_FOCUSED);
     render();
     return;
   }
@@ -1325,34 +1336,242 @@ empty idle state."
 ### Task 7: Regression, harness coverage, and docs
 
 **Files:**
-- Create: `test/shelf-integration.md` (notes for the CDP checks; no code)
+- Create: `test/integration/shelf.cdp.js`
+- Create: `test/shelf-integration.md` (what the harness does *not* cover)
+- Modify: `package.json` (add `test:ui` script)
 - Modify: `README.md`
+
+Earlier verification in this project used throwaway CDP harnesses in a temp
+directory; they have since been lost. This task rebuilds one as a committed,
+repeatable artifact so the UI paths stay checkable after this change too.
 
 - [ ] **Step 1: Run the unit tests**
 
 Run: `npm test`
 Expected: PASS — 19 tests, 0 failures.
 
-- [ ] **Step 2: Run the existing CDP regression harnesses**
+- [ ] **Step 2: Add the `test:ui` script**
 
-These live in the session scratchpad. Both must be pinned to `scale: 1` in their seeded config (they already are).
+In `package.json`, add to `scripts`:
 
-Run: `node verify.js` then `node verify2.js` from the scratchpad directory.
-Expected: window sizes still `420×720` / `420×950`; import, toggle, sidecar restoration, section stamps, completion-once, all three abort actions, filename collisions, and completed-plan restoration all behave as before.
-
-If `verify2.js`'s abort assertions fail, that is expected and correct — "log it" now archives the plan. Update that assertion to also check `archived: true` in the sidecar rather than weakening it.
-
-- [ ] **Step 3: Confirm the shelf never resizes the window**
-
-With several plans stored, run `npm start`, press `▤`, and check in DevTools:
-
-```js
-[outerWidth, outerHeight]
+```json
+"test:ui": "node test/integration/shelf.cdp.js"
 ```
 
-Expected: the focused size for your scale — `420×720` at 1×, `735×1260` at 1.75×. Never the 950-based list height.
+`npm test` stays unit-only because Task 1 set it to `node --test "test/*.test.js"`,
+which matches only direct `*.test.js` children of `test/`. Do not "simplify" it to
+a bare `node --test` — that form's default discovery includes `**/test/**/*.js`
+and would launch this harness's real window during the unit run. After adding the
+script, confirm `npm test` still reports 19 tests and does not open a window.
 
-- [ ] **Step 4: Document the shelf in the README**
+- [ ] **Step 3: Write the CDP harness**
+
+Create `test/integration/shelf.cdp.js`. It drives the real app over the Chrome
+DevTools Protocol and exits non-zero on the first failed assertion.
+
+```js
+'use strict';
+
+// Drives the real app over CDP and asserts the shelf behaves.
+//   npm run test:ui
+//
+// Uses a throwaway user-data dir and records folder, so it never touches the
+// caller's real config or plans. Pinned to scale 1 so geometry assertions are
+// in CSS pixels.
+
+const { spawn } = require('child_process');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const PROJECT = path.join(__dirname, '..', '..');
+const ELECTRON = path.join(PROJECT, 'node_modules', 'electron', 'dist', 'electron.exe');
+const PORT = 9422;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const PLAN_A = '# Alpha Stream\n\n## Work\n- [ ] alpha one\n- [ ] alpha two\n';
+const PLAN_B = '# Beta Stream\n\n## Work\n- [ ] beta one\n';
+
+let child = null;
+const checks = [];
+function check(name, fn) { checks.push({ name, fn }); }
+
+async function connect() {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+      const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      if (page) {
+        const ws = new WebSocket(page.webSocketDebuggerUrl);
+        await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+        return ws;
+      }
+    } catch { /* not up yet */ }
+    await wait(400);
+  }
+  throw new Error('could not attach to the app over CDP');
+}
+
+function rpc(ws) {
+  let id = 0;
+  const pending = new Map();
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    const p = pending.get(msg.id);
+    if (p) { pending.delete(msg.id); p(msg.result); }
+  };
+  const send = (method, params = {}) => {
+    const i = ++id;
+    ws.send(JSON.stringify({ id: i, method, params }));
+    return new Promise((res) => pending.set(i, res));
+  };
+  const evaluate = async (expr) => {
+    const r = await send('Runtime.evaluate', {
+      expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true,
+    });
+    if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails.exception));
+    return r.result.value;
+  };
+  return { send, evaluate };
+}
+
+const pasteInto = (text) => `
+  const dt = new DataTransfer();
+  dt.setData('text/plain', ${JSON.stringify(text)});
+  document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+`;
+
+(async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-ui-ud-'));
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-ui-rec-'));
+  fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({
+    recordsDir: records, activePlan: null, muted: true, scale: 1,
+  }));
+
+  child = spawn(ELECTRON, ['.', `--user-data-dir=${userData}`, `--remote-debugging-port=${PORT}`],
+    { cwd: PROJECT, stdio: 'ignore' });
+
+  const ws = await connect();
+  const { send, evaluate } = rpc(ws);
+  await send('Page.enable');
+  await wait(1500);
+
+  // --- import two plans, ticking one task in the first ------------------
+  await evaluate(pasteInto(PLAN_A));
+  await wait(3000);
+  await evaluate(`document.querySelector('.task').click();`);
+  await wait(1500);
+
+  await evaluate(pasteInto(PLAN_B));           // import while a plan is loaded
+  await wait(3500);
+
+  check('importing while a plan is loaded switches to it', async () => {
+    const title = await evaluate(`return document.getElementById('paper-title').textContent;`);
+    assert.match(title, /Beta Stream/);
+  });
+
+  // --- the shelf --------------------------------------------------------
+  await evaluate(`document.getElementById('shelf-toggle').click();`);
+  await wait(900);
+
+  check('the shelf lists both plans, most recent first', async () => {
+    const names = await evaluate(
+      `return [...document.querySelectorAll('.shelf-row .name')].map(n => n.textContent);`);
+    assert.deepEqual(names, ['Beta Stream', 'Alpha Stream']);
+  });
+
+  check('the active plan is marked', async () => {
+    const active = await evaluate(
+      `const r = document.querySelector('.shelf-row.active .name'); return r ? r.textContent : null;`);
+    assert.equal(active, 'Beta Stream');
+  });
+
+  check('the counter reports the plan count', async () => {
+    assert.equal(await evaluate(`return document.getElementById('counter').textContent;`), '2 plans');
+  });
+
+  check('the shelf does not grow the window', async () => {
+    assert.deepEqual(await evaluate(`return [outerWidth, outerHeight];`), [420, 720]);
+  });
+
+  // --- switching --------------------------------------------------------
+  await evaluate(`
+    const rows = [...document.querySelectorAll('.shelf-row')];
+    rows.find(r => r.querySelector('.name').textContent === 'Alpha Stream').click();
+  `);
+  await wait(4000);
+
+  check('switching loads the chosen plan and keeps its progress', async () => {
+    const state = await evaluate(`
+      return { title: document.getElementById('paper-title').textContent,
+               counter: document.getElementById('counter').textContent };
+    `);
+    assert.match(state.title, /Alpha Stream/);
+    assert.equal(state.counter, '1/2 done', 'the tick made before switching away survived');
+  });
+
+  // --- finishing sinks a plan into the done group ------------------------
+  await evaluate(`document.querySelector('.task').click();`);
+  await wait(2500);
+  await evaluate(`
+    const b = document.querySelectorAll('#dialog-actions button');
+    if (b.length) b[1].click();          // "skip"
+  `);
+  await wait(2500);
+
+  check('a completed plan sinks below the done rule', async () => {
+    const shown = await evaluate(`
+      if (document.getElementById('paper-body').querySelector('.shelf-row') === null) {
+        document.getElementById('shelf-toggle').click();
+        await new Promise(r => setTimeout(r, 800));
+      }
+      const groups = [...document.querySelectorAll('.shelf-group')].map(g => g.textContent);
+      const finished = [...document.querySelectorAll('.shelf-row.finished .name')].map(n => n.textContent);
+      return { groups, finished };
+    `);
+    assert.deepEqual(shown.groups, ['done']);
+    assert.ok(shown.finished.includes('Alpha Stream'), 'the finished plan is in the done group');
+  });
+
+  // --- run them ---------------------------------------------------------
+  let failed = 0;
+  for (const c of checks) {
+    try {
+      await c.fn();
+      console.log(`  ok  ${c.name}`);
+    } catch (err) {
+      failed++;
+      console.error(`FAIL  ${c.name}\n      ${err.message}`);
+    }
+  }
+
+  console.log(`\n${checks.length - failed}/${checks.length} passed`);
+  child.kill();
+  process.exit(failed ? 1 : 0);
+})().catch((err) => {
+  console.error('harness error:', err);
+  if (child) child.kill();
+  process.exit(1);
+});
+```
+
+- [ ] **Step 4: Run the harness**
+
+Run: `npm run test:ui`
+Expected: `6/6 passed`, exit code 0. A window will open and close during the run.
+
+If a check fails, fix the app — not the assertion — unless the assertion is
+itself wrong, in which case say so in the commit message.
+
+- [ ] **Step 5: Confirm the shelf holds its size at other scales**
+
+The harness pins scale to 1. Check the scaled case by hand once: run `npm start`,
+press `Ctrl+=` to reach 1.75×, press `▤`, and in DevTools check `[outerWidth, outerHeight]`.
+
+Expected: `735×1260` — the focused height scaled, never the 950-based list height.
+
+- [ ] **Step 6: Document the shelf in the README**
 
 In the Controls table, add a row after the view-toggle row:
 
@@ -1376,37 +1595,44 @@ Dropping or pasting a new plan while one is loaded imports it and switches
 straight to it.
 ```
 
-- [ ] **Step 5: Write the integration checklist**
+- [ ] **Step 7: Write down what is still unautomated**
 
-Create `test/shelf-integration.md` recording what was verified by hand, so the next person knows what the unit tests do *not* cover:
+Create `test/shelf-integration.md` so the next person knows where coverage stops:
 
 ```markdown
-# Shelf — manual/CDP checks
+# Shelf — test coverage map
 
-Unit tests (`npm test`) cover listing, ordering, grouping, migration,
-adoption, archiving and touching. They do not cover the UI. These are the
-checks to run against the running app:
+- `npm test` — unit tests over the storage logic: listing, ordering,
+  grouping, migration, adoption, archiving, touching, and the path guard.
+- `npm run test:ui` — CDP harness over the running app: importing while a
+  plan is loaded, shelf contents and ordering, the active marker, the plan
+  counter, window size, switching, progress surviving a switch, and a
+  completed plan sinking under the `done` rule.
 
-- [ ] Shelf lists every plan with correct titles and counts
-- [ ] Live plans ordered most-recently-touched first; active row marked `▸`
-- [ ] Finished plans below the `done` rule, `✓` complete / `✕` abandoned
-- [ ] Clicking a row feeds the sheet down and prints the chosen plan
-- [ ] Progress survives a switch away and back
-- [ ] Dropping a file with a plan loaded imports and switches
-- [ ] Completing a plan lands in the shelf with the plan marked done
-- [ ] `Ctrl+C` → "log it" sinks the plan under `done`
-- [ ] Window stays at the focused height in shelf view, at every scale
-- [ ] A `.md` copied into the folder by hand appears and gains a sidecar
+Neither covers the following. Check them by hand when touching the shelf:
+
+- [ ] `Ctrl+C` → "log it" sinks the plan under `done` with a `✕`
+- [ ] Real drag-and-drop of a `.md` file (the harness pastes instead)
+- [ ] A `.md` copied into the records folder by hand appears and gains a sidecar
+- [ ] The shelf holds the focused height at scales other than 1×
+- [ ] Sounds play on switch and mute silences them
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Run everything once more and commit**
+
+Run: `npm test && npm run test:ui`
+Expected: 19 unit tests pass, then `6/6 passed`.
 
 ```bash
 git add -A
-git commit -m "Document the shelf and record its integration checks
+git commit -m "Add a committed CDP harness for the shelf, and document the shelf
 
-Unit tests cover the storage logic; the UI paths are checked against the
-running app, so write down which is which."
+Earlier verification used throwaway harnesses in a temp directory that have
+since been lost. This one lives in the repo and runs with npm run test:ui, so
+the UI paths stay checkable.
+
+Records what neither test layer covers, so the gaps are known rather than
+assumed."
 ```
 
 ---

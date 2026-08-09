@@ -77,6 +77,18 @@ Dropped files are **copied** into your records folder — the original is never
 modified or deleted. If the name is taken, a timestamp is appended. Pasted plans are
 saved under a slug of their title.
 
+## Several plans at once
+
+Typewriter holds as many plans as you like. Press `▤` to see them all: live
+plans first, most recently worked on at the top, with finished and abandoned
+ones below a dotted rule. Click one to put it on the roller.
+
+Switching loses nothing. Each plan keeps its own progress file, so you can move
+between streams all day and come back to exactly where you left off.
+
+Dropping or pasting a new plan while one is loaded imports it and switches
+straight to it.
+
 ## Records
 
 Each plan gets a sidecar next to it:
@@ -97,6 +109,7 @@ checking a task rewrites `- [ ]` to `- [x]` and appends `(done YYYY-MM-DD HH:MM)
 | Drag the typewriter body | move the window |
 | Click a task or its box | check / uncheck |
 | `≡` / `●` | full list ↔ focus mode |
+| `▤` | your plans — switch between them |
 | `♪` / `✕` | sound on / muted |
 | `Ctrl+C` | abort the active plan |
 | `Ctrl` `+` / `-` / `0` | resize (see above) |
@@ -113,14 +126,24 @@ your records folder), or **cancel**.
 
 ```
 src/main/main.js       window, IPC, lifecycle
-src/main/records.js    config, records folder, plan + sidecar storage
+src/main/config.js     user config and the records-folder picker
+src/main/library.js    plans, sidecars, listing and archiving
 src/main/markdown.js   plan parsing and in-place task rewriting
 src/preload/preload.js the IPC bridge (context-isolated)
-src/renderer/          app.js, audio.js, fx.js, styles.css, index.html
+src/renderer/          app.js, shelf.js, audio.js, fx.js, styles.css, index.html
 ```
 
 No runtime dependencies — Electron and electron-builder are the only devDependencies,
 and the font is bundled, so nothing is fetched at runtime.
+
+## Tests
+
+```bash
+npm test        # unit tests over the storage logic
+npm run test:ui # drives the real app over CDP — opens a window briefly, then closes it
+```
+
+See [test/shelf-integration.md](test/shelf-integration.md) for what neither layer covers.
 
 ## Credits
 
