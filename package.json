@@ -1,6 +1,6 @@
 {
   "name": "typewriter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A tiny always-on-top pixel-art typewriter that prints and tracks your Markdown checklists.",
   "main": "src/main/main.js",
   "scripts": {
